@@ -92,7 +92,7 @@ def _get_noise_pred(model: StableDiffusionXLPipeline, latent: T, t: T, context: 
     noise_pred = model.unet(latents_input, t, encoder_hidden_states=context, added_cond_kwargs=added_cond_kwargs)["sample"]
     noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
-    # latents = next_step(model, noise_pred, t, latent)
+    
     return noise_pred
 
 
@@ -105,7 +105,7 @@ def _ddim_loop(model: StableDiffusionXLPipeline, z0, prompt, guidance_scale) -> 
         noise_pred = _get_noise_pred(model, latent, t, text_embedding, guidance_scale, added_cond_kwargs)
         latent = _next_step(model, noise_pred, t, latent)
         all_latent.append(latent)
-    return torch.cat(all_latent).flip(0)
+    return torch.cat(all_latent)
 
 
 def make_inversion_callback(zts, offset: int = 0) -> [T, InversionCallback]:
