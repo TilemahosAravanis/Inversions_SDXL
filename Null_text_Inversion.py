@@ -219,7 +219,7 @@ def text2image_ldm_stable(
         latent = diffusion_step(model, latent, context, t, guidance_scale, added_cond_kwargs)
         
     if return_type == 'image':
-        image = latent2image(model.vae, latent)
+        image = latent2image(model, latent)
     else:
         image = latent
     
