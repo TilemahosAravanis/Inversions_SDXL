@@ -186,6 +186,9 @@ def latent2image(model: StableDiffusionXLPipeline, latents):
 
         image = model.vae.decode(latents / model.vae.config.scaling_factor, return_dict=False)[0]
 
+        print(type(image))
+        print(image.shape)
+
         # cast back to fp16 if needed
         if needs_upcasting:
             model.vae.to(dtype=torch.float16)
