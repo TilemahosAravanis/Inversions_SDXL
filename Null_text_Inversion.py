@@ -178,27 +178,52 @@ class NullInversion:
 
 
 def latent2image(model: StableDiffusionXLPipeline, latents):
-        latents = 1 / (model.vae.config.scaling_factor) * latents.detach()
-        image = model.vae.decode(latents)['sample']
-        image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
-        image = (image * 255).astype(np.uint8)
+        # make sure the VAE is in float32 mode, as it overflows in float16
+        needs_upcasting = model.vae.dtype == torch.float16 and model.vae.config.force_upcast
+        if needs_upcasting:
+            model.upcast_vae()
+            latents = latents.to(next(iter(model.vae.post_quant_conv.parameters())).dtype)
+
+        image = model.vae.decode(latents / model.vae.config.scaling_factor, return_dict=False)[0]
+
+        # cast back to fp16 if needed
+        if needs_upcasting:
+            model.vae.to(dtype=torch.float16)
+
+        image = model.image_processor.postprocess(image, output_type='pil')
+        
         return image
 
+# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
+def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
+    """
+    Rescale `noise_cfg` according to `guidance_rescale`. Based on findings of [Common Diffusion Noise Schedules and
+    Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf). See Section 3.4
+    """
+    std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
+    std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
+    # rescale the results from guidance (fixes overexposure)
+    noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
+    # mix with the original results from guidance by factor guidance_rescale to avoid "plain looking" images
+    noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
+    return noise_cfg
 
-def diffusion_step(model, latent, context, t, guidance_scale, added_cond_kwargs):
+
+def diffusion_step(model: StableDiffusionXLPipeline, latent, context, t, guidance_scale, added_cond_kwargs):
     latents_input = torch.cat([latent] * 2)
-    noise_pred = model.unet(latents_input, t, encoder_hidden_states=context, added_cond_kwargs=added_cond_kwargs)["sample"]
-    noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
-    noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
-    latents = model.scheduler.step(noise_pred, t, latent)["prev_sample"]
+    latents_input = model.scheduler.scale_model_input(latents_input, t)
+    noise_pred = model.unet(latents_input, t, encoder_hidden_states=context, added_cond_kwargs=added_cond_kwargs, return_dict=False)[0]
+    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text)
+    out_latent = model.scheduler.step(noise_pred, t, latent, return_dict=False)[0]
     
-    return latents
+    return out_latent
 
 @torch.no_grad()
 def text2image_ldm_stable(
-    model,
-    prompt:  List[str],
+    model: StableDiffusionXLPipeline,
+    prompt: List[str],
     num_inference_steps: int = 50,
     guidance_scale: Optional[float] = 7.5,
     generator: Optional[torch.Generator] = None,
@@ -207,7 +232,7 @@ def text2image_ldm_stable(
     start_time=50,
     return_type='image'
 ):
-    added_cond_kwargs, prompt_embedds = DDIM_inversion._encode_text_sdxl_with_negative(model, prompt)
+    added_cond_kwargs, prompt_embedds = DDIM_inversion._encode_text_sdxl_with_negative(model, prompt[0])
 
     model.scheduler.set_timesteps(num_inference_steps)
     for i, t in enumerate(tqdm(model.scheduler.timesteps[-start_time:])):
