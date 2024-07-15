@@ -1,7 +1,7 @@
 from typing import Optional, Union, Tuple, List, Callable, Dict
 from tqdm.notebook import tqdm
 import torch
-from diffusers import StableDiffusionXLPipeline, DDIMScheduler
+from diffusers import StableDiffusionXLPipeline
 import torch.nn.functional as nnf
 import numpy as np
 import DDIM_inversion
@@ -22,7 +22,7 @@ def latent2image(model: StableDiffusionXLPipeline, latents):
 
         image = model.image_processor.postprocess(image, output_type='pil')
         
-        return image[0]
+        return image
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.rescale_noise_cfg
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
